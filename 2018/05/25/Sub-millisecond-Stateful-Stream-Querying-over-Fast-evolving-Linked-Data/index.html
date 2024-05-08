@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 7.2.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/blog/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/blog/favicon.ico">
+  <link rel="icon" type="image/png" sizes="16x16" href="/blog/favicon.ico">
+  <link rel="mask-icon" href="/blog/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/blog/css/main.css">
+
+
+<link rel="stylesheet" href="/blog/lib/font-awesome/css/font-awesome.min.css">
+
+
+<script id="hexo-configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    hostname: new URL('https://fengruotj.github.io').hostname,
+    root: '/blog/',
+    scheme: 'Gemini',
+    version: '7.7.0',
+    exturl: false,
+    sidebar: {"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},
+    copycode: {"enable":false,"show_result":false,"style":null},
+    back2top: {"enable":true,"sidebar":false,"scrollpercent":false},
+    bookmark: {"enable":false,"color":"#222","save":"auto"},
+    fancybox: false,
+    mediumzoom: false,
+    lazyload: false,
+    pangu: false,
+    comments: {"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},
+    algolia: {
+      appID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    },
+    localsearch: {"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},
+    path: 'search.xml',
+    motion: {"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}
+  };
+</script>
+
+  <meta name="description" content="ABSTRACT场景：社交网络，城市监控和市场馈送处理等应用需要有状态的流式查询，状态流查询不仅要查询流式数据，还要查询存储的数据来及时提取有用的信息。实时流数据提供的有用信息，也需要持续不断地整合到存储的数据中，以便为上述和未来提供查询服务。然而，先前的流式处理系统或者侧重于流计算，或者不是有状态的，或者不能提供低延迟和高吞吐量来处理快速发展的Linked数据，并且能够支持不断增加的查询并发性。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Sub-millisecond Stateful Stream Querying over Fast-evolving Linked Data">
+<meta property="og:url" content="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data/index.html">
+<meta property="og:site_name" content="Master.TJ 的个人博客">
+<meta property="og:description" content="ABSTRACT场景：社交网络，城市监控和市场馈送处理等应用需要有状态的流式查询，状态流查询不仅要查询流式数据，还要查询存储的数据来及时提取有用的信息。实时流数据提供的有用信息，也需要持续不断地整合到存储的数据中，以便为上述和未来提供查询服务。然而，先前的流式处理系统或者侧重于流计算，或者不是有状态的，或者不能提供低延迟和高吞吐量来处理快速发展的Linked数据，并且能够支持不断增加的查询并发性。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data//blog/images/pasted-16.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data//blog/images/pasted-17.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data//blog/images/pasted-18.png">
+<meta property="article:published_time" content="2018-05-25T08:01:00.000Z">
+<meta property="article:modified_time" content="2024-05-08T19:47:58.626Z">
+<meta property="article:author" content="Master.TJ">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data//blog/images/pasted-16.png">
+
+<link rel="canonical" href="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome: false,
+    isPost: true
+  };
+</script>
+
+  <title>Sub-millisecond Stateful Stream Querying over Fast-evolving Linked Data | Master.TJ 的个人博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-meta">
+
+    <div>
+      <a href="/blog/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">Master.TJ 的个人博客</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+        <p class="site-subtitle">blog</p>
+  </div>
+
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+</div>
+
+
+<nav class="site-nav">
+  
+  <ul id="menu" class="menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/blog/" rel="section"><i class="fa fa-fw fa-home"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/blog/about/" rel="section"><i class="fa fa-fw fa-user"></i>关于</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/blog/tags/" rel="section"><i class="fa fa-fw fa-tags"></i>标签</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/blog/categories/" rel="section"><i class="fa fa-fw fa-th"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/blog/archives/" rel="section"><i class="fa fa-fw fa-archive"></i>归档</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜索
+        </a>
+      </li>
+  </ul>
+
+</nav>
+  <div class="site-search">
+    <div class="popup search-popup">
+    <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocorrect="off" autocapitalize="none"
+           placeholder="搜索..." spellcheck="false"
+           type="text" id="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result"></div>
+
+</div>
+<div class="search-pop-overlay"></div>
+
+  </div>
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content">
+            
+
+  <div class="posts-expand">
+      
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block " lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://fengruotj.github.io/2018/05/25/Sub-millisecond-Stateful-Stream-Querying-over-Fast-evolving-Linked-Data/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/blog/images/avatar.gif">
+      <meta itemprop="name" content="Master.TJ">
+      <meta itemprop="description" content="此地专注技术！">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Master.TJ 的个人博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Sub-millisecond Stateful Stream Querying over Fast-evolving Linked Data
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2018-05-25 16:01:00" itemprop="dateCreated datePublished" datetime="2018-05-25T16:01:00+08:00">2018-05-25</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-calendar-check-o"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2024-05-09 03:47:58" itemprop="dateModified" datetime="2024-05-09T03:47:58+08:00">2024-05-09</time>
+              </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/blog/categories/%E7%A0%94%E7%A9%B6%E7%94%9F%E8%AE%BA%E6%96%87%E7%A0%94%E8%AF%BB/" itemprop="url" rel="index">
+                    <span itemprop="name">研究生论文研读</span>
+                  </a>
+                </span>
+            </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <h3 id="ABSTRACT"><a href="#ABSTRACT" class="headerlink" title="ABSTRACT"></a>ABSTRACT</h3><p>场景：社交网络，城市监控和市场馈送处理等应用需要有状态的流式查询，状态流查询不仅要查询流式数据，还要查询存储的数据来及时提取有用的信息。实时流数据提供的有用信息，也需要持续不断地整合到存储的数据中，以便为上述和未来提供查询服务。<br>然而，先前的流式处理系统或者侧重于流计算，或者不是有状态的，或者不能提供低延迟和高吞吐量来处理快速发展的Linked数据，并且能够支持不断增加的查询并发性。<br>Wukong + S采用集成设计，将流处理和持久化存储相结合，实现高效的状态共享，避免了传统复合设计（如Storm / Heron + Wukong）中的跨系统成本和次优查询性能。 Wukong + S使用混合存储来区分管理持久的数据和瞬时数据，并提供有效的流索引和本地分区，以便快速访问流数据。 Wukong + S进一步提供分散的矢量时间戳和有界的快照标量化，以节省内存使用量的节点和大量查询。</p>
+<h3 id="INTRODUCTION："><a href="#INTRODUCTION：" class="headerlink" title="INTRODUCTION："></a>INTRODUCTION：</h3><h4 id="问题提出场景："><a href="#问题提出场景：" class="headerlink" title="问题提出场景："></a>问题提出场景：</h4><p>随着流数据和存储数据量的不断增加，及时查询有用的信息十分重要。对于公共数据集合数据流，可能有大量的用户不同的数据流查询请求，因此需要支持高并发的查询。而且流数据通常包含巨大的有用信息， 这样的数据应该被一致地和立即地整合到存储系统，以用于将来的连续查询。<br>现有的工作：然而目前现有的系统对于正在变化的数据集的侧重点在于流计算。流计算和流查询不同的是 前者通常倾向于对大部分流数据进行序列化计算，而后者侧重于对流和存储数据的特定集合的并发查询。大多数先前的系统也没有集成流数据为了并发的查询中，或者不查询持久化存储的历史数据来获得基础知识，因此是无状态的。 尽管大多数流处理数据库都明确支持语义和SQL接口，但是他们在快速演化的Linked 数据下，当面临大量并发的查询请求下，由于高昂的Join操作开销和一些ACID的语义，他们的查询性能是低效的。</p>
+<h4 id="解决方案："><a href="#解决方案：" class="headerlink" title="解决方案："></a>解决方案：</h4><ol>
+<li>Wukong-S为了尊重数据本地化并最大限度地减少数据传输，它使用由基于时间的临时存储和连续持久化存储组成的混合存储，为正在到来的数据和持久化的数据提供不同的存储管理。</li>
+<li>Wukong + S提供了流数据的快速访问流索引。流数据通过局部感知分区进行分片，其中一些流索引在节点间动态复制。这节省了查询成本并提供高效的负载平衡。</li>
+<li>为了在多个不同规模的流数据上提供一致的流查询，Wukong + S使用分散的矢量时间戳来推导出最近一致性状态的流式数据插入。Wukong + S使用有限的标量化方案将矢量时间戳投影到标量快照数量中，通过协调多个流的更新到底层持久存储区。这样的设计在有效的内存使用情况下扩展了Wukong + S节点和大量查询。</li>
+</ol>
+<h3 id="MOTIVATION"><a href="#MOTIVATION" class="headerlink" title="MOTIVATION"></a>MOTIVATION</h3><p>根据工作负载特性，提出了一条流旨在支持大量的查询系统(连续的和一次性的)对流和存储的查询数据。有几种独特的需求可以区分来自其他流系统的流查询系统。</p>
+<p><img src="\blog\images\pasted-16.png" alt="upload successful"></p>
+<p><img src="\blog\images\pasted-17.png" alt="upload successful"></p>
+<h3 id="APPROACH-ANN-OVERVIEW"><a href="#APPROACH-ANN-OVERVIEW" class="headerlink" title="APPROACH ANN OVERVIEW"></a>APPROACH ANN OVERVIEW</h3><p><img src="\blog\images\pasted-18.png" alt="upload successful"></p>
+<p>目前存在的系统采用的是讲流处理系统和以查询为主导的存储系统简单结合。简单的组合设计会造成性能低效的结果。比如讲Esper和Apahe Jena组合</p>
+<ol>
+<li>Issue1. Cross-system Cost</li>
+<li>Issue2. Sub-optimal query plan </li>
+<li>Issue3. Limited scalability</li>
+</ol>
+<p>Wukong+S做的就是一个整体设计。Wukong+ S使用了一个内置的设计，目标是对流和存储数据进行连续和一次性的查询。关键的设计原则就是对待持久化的存储作为关键的解决方案</p>
+
+    </div>
+
+    
+    
+    
+        <div class="reward-container">
+  <div></div>
+  <button disable="enable" onclick="var qr = document.getElementById(&quot;qr&quot;); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    打赏
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/blog/uploads/wechat-reward.jpg" alt="Master.TJ 微信支付">
+        <p>微信支付</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/blog/uploads/alipay-reward.jpg" alt="Master.TJ 支付宝">
+        <p>支付宝</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/blog/2018/05/25/Bipartite-graph-%E4%BA%8C%E5%88%86%E5%9B%BE/" rel="prev" title="Bipartite_graph 二分图">
+      <i class="fa fa-chevron-left"></i> Bipartite_graph 二分图
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/blog/2018/05/25/TUX2-Distributed-Graph-Computation-for-Machine-Learning/" rel="next" title="TUX2: Distributed Graph Computation for Machine Learning">
+      TUX2: Distributed Graph Computation for Machine Learning <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+  </div>
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let activeClass = CONFIG.comments.activeClass;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-3"><a class="nav-link" href="#ABSTRACT"><span class="nav-number">1.</span> <span class="nav-text">ABSTRACT</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#INTRODUCTION%EF%BC%9A"><span class="nav-number">2.</span> <span class="nav-text">INTRODUCTION：</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#%E9%97%AE%E9%A2%98%E6%8F%90%E5%87%BA%E5%9C%BA%E6%99%AF%EF%BC%9A"><span class="nav-number">2.1.</span> <span class="nav-text">问题提出场景：</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%EF%BC%9A"><span class="nav-number">2.2.</span> <span class="nav-text">解决方案：</span></a></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#MOTIVATION"><span class="nav-number">3.</span> <span class="nav-text">MOTIVATION</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#APPROACH-ANN-OVERVIEW"><span class="nav-number">4.</span> <span class="nav-text">APPROACH ANN OVERVIEW</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Master.TJ</p>
+  <div class="site-description" itemprop="description">此地专注技术！</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/blog/archives/">
+        
+          <span class="site-state-item-count">14</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/blog/categories/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/blog/tags/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/fengruotj" title="GitHub → https://github.com/fengruotj" rel="noopener" target="_blank"><i class="fa fa-fw fa-github"></i>GitHub</a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="mailto:tanjiemaster@gmail.com" title="E-Mail → mailto:tanjiemaster@gmail.com" rel="noopener" target="_blank"><i class="fa fa-fw fa-envelope"></i>E-Mail</a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2024</span>
+  <span class="with-love">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Master.TJ</span>
+</div>
+  <div class="powered-by">由 <a href="https://hexo.io" class="theme-link" rel="noopener" target="_blank">Hexo</a> 强力驱动 v7.2.0
+  </div>
+  <span class="post-meta-divider">|</span>
+  <div class="theme-info">主题 – <a href="https://theme-next.org" class="theme-link" rel="noopener" target="_blank">NexT.Gemini</a> v7.7.0
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  
+  <script color='0,0,255' opacity='0.5' zIndex='-1' count='99' src="/blog/lib/canvas-nest/canvas-nest.min.js"></script>
+  <script size="300" alpha="0.6" zIndex="-1" src="/blog/lib/canvas-ribbon/canvas-ribbon.js"></script>
+  <script src="/blog/lib/anime.min.js"></script>
+  <script src="/blog/lib/velocity/velocity.min.js"></script>
+  <script src="/blog/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/blog/js/utils.js"></script>
+
+<script src="/blog/js/motion.js"></script>
+
+
+<script src="/blog/js/schemes/pisces.js"></script>
+
+
+<script src="/blog/js/next-boot.js"></script>
+
+
+  <script defer src="/blog/lib/three/three.min.js"></script>
+    <script defer src="/blog/lib/three/three-waves.min.js"></script>
+    <script defer src="/blog/lib/three/canvas_lines.min.js"></script>
+    <script defer src="/blog/lib/three/canvas_sphere.min.js"></script>
+
+
+  
+
+
+
+
+  
+<script src="/blog/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>

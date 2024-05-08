@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 7.2.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/blog/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/blog/favicon.ico">
+  <link rel="icon" type="image/png" sizes="16x16" href="/blog/favicon.ico">
+  <link rel="mask-icon" href="/blog/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/blog/css/main.css">
+
+
+<link rel="stylesheet" href="/blog/lib/font-awesome/css/font-awesome.min.css">
+
+
+<script id="hexo-configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    hostname: new URL('https://fengruotj.github.io').hostname,
+    root: '/blog/',
+    scheme: 'Gemini',
+    version: '7.7.0',
+    exturl: false,
+    sidebar: {"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},
+    copycode: {"enable":false,"show_result":false,"style":null},
+    back2top: {"enable":true,"sidebar":false,"scrollpercent":false},
+    bookmark: {"enable":false,"color":"#222","save":"auto"},
+    fancybox: false,
+    mediumzoom: false,
+    lazyload: false,
+    pangu: false,
+    comments: {"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},
+    algolia: {
+      appID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    },
+    localsearch: {"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},
+    path: 'search.xml',
+    motion: {"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}
+  };
+</script>
+
+  <meta name="description" content="面对高性能计算、大数据分析和浪涌型IO高并发、低时延应用，现有TCP&#x2F;IP软硬件架构和应用高CPU消耗的技术特征根本不能满足应用的需求。这要有体现在处理延时过大，数十微秒；多次内存拷贝、中断处理，上下文切换、复杂的TCP&#x2F;IP协议处理、网络延时过大、存储转发模式和丢包导致额外延时。接下来我们继续讨论RDMA技术、原理和优势，看完文章你就会找到为什么RDMA可以更好的解决这一系列问题。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RDMA技术详解">
+<meta property="og:url" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Master.TJ 的个人博客">
+<meta property="og:description" content="面对高性能计算、大数据分析和浪涌型IO高并发、低时延应用，现有TCP&#x2F;IP软硬件架构和应用高CPU消耗的技术特征根本不能满足应用的需求。这要有体现在处理延时过大，数十微秒；多次内存拷贝、中断处理，上下文切换、复杂的TCP&#x2F;IP协议处理、网络延时过大、存储转发模式和丢包导致额外延时。接下来我们继续讨论RDMA技术、原理和优势，看完文章你就会找到为什么RDMA可以更好的解决这一系列问题。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-5.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-6.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-7.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-8.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-9.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-10.png">
+<meta property="og:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-11.png">
+<meta property="article:published_time" content="2018-05-25T07:51:00.000Z">
+<meta property="article:modified_time" content="2024-05-08T19:47:58.626Z">
+<meta property="article:author" content="Master.TJ">
+<meta property="article:tag" content="RDMA">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3//blog/images/pasted-5.png">
+
+<link rel="canonical" href="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome: false,
+    isPost: true
+  };
+</script>
+
+  <title>RDMA技术详解 | Master.TJ 的个人博客</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-meta">
+
+    <div>
+      <a href="/blog/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">Master.TJ 的个人博客</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+        <p class="site-subtitle">blog</p>
+  </div>
+
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+</div>
+
+
+<nav class="site-nav">
+  
+  <ul id="menu" class="menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/blog/" rel="section"><i class="fa fa-fw fa-home"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/blog/about/" rel="section"><i class="fa fa-fw fa-user"></i>关于</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/blog/tags/" rel="section"><i class="fa fa-fw fa-tags"></i>标签</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/blog/categories/" rel="section"><i class="fa fa-fw fa-th"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/blog/archives/" rel="section"><i class="fa fa-fw fa-archive"></i>归档</a>
+
+  </li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜索
+        </a>
+      </li>
+  </ul>
+
+</nav>
+  <div class="site-search">
+    <div class="popup search-popup">
+    <div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocorrect="off" autocapitalize="none"
+           placeholder="搜索..." spellcheck="false"
+           type="text" id="search-input">
+  </div>
+  <span class="popup-btn-close">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div id="search-result"></div>
+
+</div>
+<div class="search-pop-overlay"></div>
+
+  </div>
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content">
+            
+
+  <div class="posts-expand">
+      
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block " lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://fengruotj.github.io/2018/05/25/RDMA%E6%8A%80%E6%9C%AF%E8%AF%A6%E8%A7%A3/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/blog/images/avatar.gif">
+      <meta itemprop="name" content="Master.TJ">
+      <meta itemprop="description" content="此地专注技术！">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Master.TJ 的个人博客">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          RDMA技术详解
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2018-05-25 15:51:00" itemprop="dateCreated datePublished" datetime="2018-05-25T15:51:00+08:00">2018-05-25</time>
+            </span>
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-calendar-check-o"></i>
+                </span>
+                <span class="post-meta-item-text">更新于</span>
+                <time title="修改时间：2024-05-09 03:47:58" itemprop="dateModified" datetime="2024-05-09T03:47:58+08:00">2024-05-09</time>
+              </span>
+
+          
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>面对高性能计算、大数据分析和浪涌型IO高并发、低时延应用，现有TCP/IP软硬件架构和应用高CPU消耗的技术特征根本不能满足应用的需求。这要有体现在处理延时过大，数十微秒；多次内存拷贝、中断处理，上下文切换、复杂的TCP/IP协议处理、网络延时过大、存储转发模式和丢包导致额外延时。接下来我们继续讨论RDMA技术、原理和优势，看完文章你就会找到为什么RDMA可以更好的解决这一系列问题。</p>
+<p><img src="\blog\images\pasted-5.png" alt="upload successful"></p>
+<p>DMA是一种远端内存直接访问技术，详细介绍请参看文章。RDMA最早专属于Infiniband架构，随着在网络融合大趋势下出现的RoCE和iWARP，这使高速、超低延时、极低CPU使用率的RDMA得以部署在目前使用最广泛的以太网上。</p>
+<p>RDMAC（RDMA Consortium）和IBTA（InfiniBand Trade Association）主导了RDMA发展，RDMAC是IETF的一个补充并主要定义的是iWRAP和iSER，IBTA是infiniband的全部标准制定者，并补充了RoCE v1 v2的标准化。IBTA解释了RDMA传输过程中应具备的特性行为，而传输相关的Verbs接口和数据结构原型是由另一个组织OFA（Open Fabric Alliance）来完成。</p>
+<p>相比传统DMA的内部总线IO，RDMA通过网络在两个端点的应用软件之间实现Buffer的直接传递；相比比传统的网络传输，RDMA又无需操作系统和协议栈的介入。RDMA可以轻易实现端点间的超低延时、超高吞吐量传输，而且基本不需要CPU、OS等资源介入，也不必再为网络数据的处理和搬移耗费过多其他资源。   </p>
+<p><img src="\blog\images\pasted-6.png" alt="upload successful"><br>InfiniBand通过以下技术保证网络转发的低时延（亚微秒级），采用Cut-Through转发模式，减少转发时延；基于Credit的流控机制，保证无丢包；硬件卸载；Buffer尽可能小，减少报文被缓冲的时延 。</p>
+<p><img src="\blog\images\pasted-7.png" alt="upload successful"><br>iWARP(RDMA over TCP/IP) 利用成熟的IP网络；继承RDMA的优点；TCP/IP硬件实现成本高，但如果采用传统IP网络丢包对性能影响大。</p>
+<p>RoCE性能与IB网络相当；DCB特性保证无丢包；需要以太网支持DCB特性；以太交换机时延比IB交换机时延要稍高一些。</p>
+<p><img src="\blog\images\pasted-8.png" alt="upload successful"><br>RoCEv2针对RoCE进行了一些改进，如引入IP解决扩展性问题，可以跨二层组网；引入UDP解决ECMP负载分担等问题。</p>
+<p><img src="\blog\images\pasted-9.png" alt="upload successful"><br>基于InfiniBand的RDMA是在2000年发布规范，属于原生RDMA；基于TCP/IP的RDMA称作iWARP，在 2007年形成标准，主要包括MPA/DDP/RDMAP三层子协议；基于Ethernet的RDMA叫做RoCE，在2010年发布协议，基于增强型以太网并将传输层换成IB传输层实现。</p>
+<p>扩展RDMA API接口以兼容现有协议/应用，OFED(Open Fabrics Enterprise Distribution)协议栈由OpenFabric联盟发布，分为Linux和windows版本，可以无缝兼容已有应用。通过使已有应用与RDMA结合后，性能成倍提升。</p>
+<p><img src="\blog\images\pasted-10.png" alt="upload successful"></p>
+<p>应用和RNIC（RDMA-aware network interface controller）之间的传输接口层（Software Transport Interface）被称为Verbs。OFA(Open Fabric Alliance)提供了RDMA传输的一系列Verbs API。OFA开发了OFED（Open Fabric Enterprise Distribution）协议栈，支持多种RDMA传输层协议。</p>
+<p> OFED向下除了提供RNIC(实现 RDMA 和LLP( Lower Layer Protocol))基本的队列消息服务外，向上还提供了ULP（Upper Layer Protocols），通过ULP上层应用不需直接和Verbs API对接，而是借助于ULP与应用对接，这样使得常见的应用不需要做修改就可以跑在RDMA传输层上。</p>
+<p>在Infiniband/RDMA的模型中，核心是如何实现应用之间最简单、高效和直接的通信。RDMA提供了基于消息队列的点对点通信，每个应用都可以直接获取自己的消息，无需操作系统和协议栈的介入。</p>
+<p>消息服务建立在通信双方本端和远端应用之间创建的Channel-IO连接之上。当应用需要通信时，就会创建一条Channel连接，每条Channel的首尾端点是两对Queue Pairs（QP），每对QP由Send Queue（SQ）和Receive Queue（RQ）构成，这些队列中管理着各种类型的消息。QP会被映射到应用的虚拟地址空间，使得应用直接通过它访问RNIC网卡。除了QP描述的两种基本队列之外，RDMA还提供一种队列Complete Queue（CQ），CQ用来知会用户WQ上的消息已经被处理完。</p>
+<p><img src="\blog\images\pasted-11.png" alt="upload successful"></p>
+<p>RDMA提供了一套软件传输接口，方便用户创建传输请求Work Request(WR），WR中描述了应用希望传输到Channel对端的消息内容，WR通知QP中的某个队列Work Queue（WQ）。在WQ中，用户的WR被转化为Work Queue Ellement（WQE）的格式，等待RNIC的异步调度解析，并从WQE指向的Buffer中拿到真正的消息发送到Channel对端。</p>
+<p>RDMA中SEND/RECEIVE是双边操作，即必须要远端的应用感知参与才能完成收发。READ和WRITE是单边操作，只需要本端明确信息的源和目的地址，远端应用不必感知此次通信，数据的读或写都通过RDMA在RNIC与应用Buffer之间完成，再由远端RNIC封装成消息返回到本端。在实际中，SEND/RECEIVE多用于连接控制类报文，而数据报文多是通过READ/WRITE来完成的。</p>
+<p>对于双边操作为例，主机A向主机B(下面简称A、B)发送数据的流程如下：</p>
+<ol>
+<li>首先，A和B都要创建并初始化好各自的QP，CQ</li>
+<li>A和B分别向自己的WQ中注册WQE，对于A，WQ=SQ，WQE描述指向一个等到被发送的数据；对于B，WQ=RQ，WQE描述指向一块用于存储数据的Buffer。</li>
+<li>A的RNIC异步调度轮到A的WQE，解析到这是一个SEND消息，从Buffer中直接向B发出数据。数据流到达B的RNIC后，B的WQE被消耗，并把数据直接存储到WQE指向的存储位置。</li>
+<li>AB通信完成后，A的CQ中会产生一个完成消息CQE表示发送完成。与此同时，B的CQ中也会产生一个完成消息表示接收完成。每个WQ中WQE的处理完成都会产生一个CQE。<br>双边操作与传统网络的底层Buffer Pool类似，收发双方的参与过程并无差别，区别在零拷贝、Kernel Bypass，实际上对于RDMA，这是一种复杂的消息传输模式，多用于传输短的控制消息。</li>
+</ol>
+<p>对于单边操作，以存储网络环境下的存储为例(A作为文件系统，B作为存储介质)，数据的流程如下（RDMA READ）：</p>
+<ol>
+<li>首先A、B建立连接，QP已经创建并且初始化。</li>
+<li>数据被存档在A的buffer地址VA，注意VA应该提前注册到A的RNIC，并拿到返回的local key，相当于RDMA操作这块buffer的权限。</li>
+<li>A把数据地址VA，key封装到专用的报文传送到B，这相当于A把数据buffer的操作权交给了B。同时A在它的WQ中注册进一个WR，以用于接收数据传输的B返回的状态。</li>
+<li>B在收到A的送过来的数据VA和R_key后，RNIC会把它们连同存储地址VB到封装RDMA READ，这个过程A、B两端不需要任何软件参与，就可以将A的数据存储到B的VB虚拟地址。</li>
+<li>B在存储完成后，会向A返回整个数据传输的状态信息。</li>
+</ol>
+<p>单边操作传输方式是RDMA与传统网络传输的最大不同，只需提供直接访问远程的虚拟地址，无须远程应用的参与其中，这种方式适用于批量数据传输。</p>
+<p>Infiniband的成功取决于两个因素，一是主机侧采用RDMA技术，可以把主机内数据处理的时延从几十微秒降低到几微秒，同时不占用CPU；二是InfiniBand网络的采用高带宽（40G/56G）、低时延（几百纳秒）和无丢包特性</p>
+<p>随着以太网的发展，也具备高带宽和无丢包能力，在时延方面也能接近InfiniBand交换机的性能，所以RDMA over Ethernet（RoCE）成为必然，且RoCE组网成本更低。未来RoCE、iWARP和Infiniband等基于RDMA技术产品都会得到长足的发展。</p>
+
+    </div>
+
+    
+    
+    
+        <div class="reward-container">
+  <div></div>
+  <button disable="enable" onclick="var qr = document.getElementById(&quot;qr&quot;); qr.style.display = (qr.style.display === 'none') ? 'block' : 'none';">
+    打赏
+  </button>
+  <div id="qr" style="display: none;">
+      
+      <div style="display: inline-block;">
+        <img src="/blog/uploads/wechat-reward.jpg" alt="Master.TJ 微信支付">
+        <p>微信支付</p>
+      </div>
+      
+      <div style="display: inline-block;">
+        <img src="/blog/uploads/alipay-reward.jpg" alt="Master.TJ 支付宝">
+        <p>支付宝</p>
+      </div>
+
+  </div>
+</div>
+
+
+      <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/blog/tags/RDMA/" rel="tag"># RDMA</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/blog/2018/05/25/%E5%86%85%E5%AD%98%E6%98%A0%E5%B0%84IO-MMIO/" rel="prev" title="内存映射IO (MMIO)">
+      <i class="fa fa-chevron-left"></i> 内存映射IO (MMIO)
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/blog/2018/05/25/Bipartite-graph-%E4%BA%8C%E5%88%86%E5%9B%BE/" rel="next" title="Bipartite_graph 二分图">
+      Bipartite_graph 二分图 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+  </div>
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let activeClass = CONFIG.comments.activeClass;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Master.TJ</p>
+  <div class="site-description" itemprop="description">此地专注技术！</div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/blog/archives/">
+        
+          <span class="site-state-item-count">14</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/blog/categories/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/blog/tags/">
+          
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/fengruotj" title="GitHub → https://github.com/fengruotj" rel="noopener" target="_blank"><i class="fa fa-fw fa-github"></i>GitHub</a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="mailto:tanjiemaster@gmail.com" title="E-Mail → mailto:tanjiemaster@gmail.com" rel="noopener" target="_blank"><i class="fa fa-fw fa-envelope"></i>E-Mail</a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2024</span>
+  <span class="with-love">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Master.TJ</span>
+</div>
+  <div class="powered-by">由 <a href="https://hexo.io" class="theme-link" rel="noopener" target="_blank">Hexo</a> 强力驱动 v7.2.0
+  </div>
+  <span class="post-meta-divider">|</span>
+  <div class="theme-info">主题 – <a href="https://theme-next.org" class="theme-link" rel="noopener" target="_blank">NexT.Gemini</a> v7.7.0
+  </div>
+
+        
+
+
+
+
+
+
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  
+  <script color='0,0,255' opacity='0.5' zIndex='-1' count='99' src="/blog/lib/canvas-nest/canvas-nest.min.js"></script>
+  <script size="300" alpha="0.6" zIndex="-1" src="/blog/lib/canvas-ribbon/canvas-ribbon.js"></script>
+  <script src="/blog/lib/anime.min.js"></script>
+  <script src="/blog/lib/velocity/velocity.min.js"></script>
+  <script src="/blog/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/blog/js/utils.js"></script>
+
+<script src="/blog/js/motion.js"></script>
+
+
+<script src="/blog/js/schemes/pisces.js"></script>
+
+
+<script src="/blog/js/next-boot.js"></script>
+
+
+  <script defer src="/blog/lib/three/three.min.js"></script>
+    <script defer src="/blog/lib/three/three-waves.min.js"></script>
+    <script defer src="/blog/lib/three/canvas_lines.min.js"></script>
+    <script defer src="/blog/lib/three/canvas_sphere.min.js"></script>
+
+
+  
+
+
+
+
+  
+<script src="/blog/js/local-search.js"></script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
